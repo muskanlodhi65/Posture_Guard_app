@@ -103,8 +103,14 @@ class PostureFatigueTracker:
     """
 
     def __init__(self) -> None:
-        mp_pose = mp.solutions.pose
-        mp_face_mesh = mp.solutions.face_mesh
+        if hasattr(mp, "solutions"):
+            mp_pose = mp.solutions.pose
+            mp_face_mesh = mp.solutions.face_mesh
+            mp_drawing = mp.solutions.drawing_utils
+        else:
+            import mediapipe.python.solutions.pose as mp_pose
+            import mediapipe.python.solutions.face_mesh as mp_face_mesh
+            import mediapipe.python.solutions.drawing_utils as mp_drawing
 
         self.pose = mp_pose.Pose(
             model_complexity=config.POSE_MODEL_COMPLEXITY,
@@ -119,7 +125,7 @@ class PostureFatigueTracker:
         )
         self.mp_pose_module = mp_pose
         self.mp_face_module = mp_face_mesh
-        self.mp_drawing = mp.solutions.drawing_utils
+        self.mp_drawing = mp_drawing
 
         # --- calibration state ---
         self.baseline = Baseline()
