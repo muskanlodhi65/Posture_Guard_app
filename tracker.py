@@ -1,7 +1,7 @@
 """
 tracker.py
 ----------
-Wraps MediaPipe Pose + FaceMesh inference, owns calibration state,
+Wraps MediaPipe Vision Tasks (PoseLandmarker + FaceLandmarker) inference, owns calibration state,
 temporal EMA smoothing, the sliding-window "sustained bad posture"
 buffer, the blink/EAR state machine, and rolling session scoring.
 
@@ -12,6 +12,7 @@ back a `FrameMetrics` snapshot ready for UI rendering and alerting.
 
 from __future__ import annotations
 
+import os
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -21,6 +22,8 @@ import numpy as np
 
 try:
     import mediapipe as mp
+    from mediapipe.tasks import python as mp_python
+    from mediapipe.tasks.python import vision
 except ImportError as exc:  # pragma: no cover - handled at runtime in main.py
     raise ImportError(
         "mediapipe is required for tracker.py. Install it with "
@@ -85,6 +88,13 @@ class FrameMetrics:
     calibration_progress: float = 0.0  # 0..1
     calibration_done: bool = False
 
+    is_too_close: bool = False
+    is_low_light: bool = False
+    ambient_luminance: float = 0.0
+
+    break_recommended: bool = False
+    break_time_remaining: float = config.BREAK_REMINDER_INTERVAL_SEC
+
     pose_landmarks_px: Optional[dict] = None   # for drawing skeleton
     eye_landmarks_px: Optional[dict] = None    # for drawing eye contours
 
@@ -103,29 +113,28 @@ class PostureFatigueTracker:
     """
 
     def __init__(self) -> None:
-        if hasattr(mp, "solutions"):
-            mp_pose = mp.solutions.pose
-            mp_face_mesh = mp.solutions.face_mesh
-            mp_drawing = mp.solutions.drawing_utils
-        else:
-            import mediapipe.python.solutions.pose as mp_pose
-            import mediapipe.python.solutions.face_mesh as mp_face_mesh
-            import mediapipe.python.solutions.drawing_utils as mp_drawing
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        pose_model_path = os.path.join(base_dir, "pose_landmarker.task")
+        face_model_path = os.path.join(base_dir, "face_landmarker.task")
 
-        self.pose = mp_pose.Pose(
-            model_complexity=config.POSE_MODEL_COMPLEXITY,
-            min_detection_confidence=config.POSE_MIN_DETECTION_CONFIDENCE,
+        pose_options = vision.PoseLandmarkerOptions(
+            base_options=mp_python.BaseOptions(model_asset_path=pose_model_path),
+            running_mode=vision.RunningMode.IMAGE,
+            min_pose_detection_confidence=config.POSE_MIN_DETECTION_CONFIDENCE,
+            min_pose_presence_confidence=config.POSE_MIN_TRACKING_CONFIDENCE,
             min_tracking_confidence=config.POSE_MIN_TRACKING_CONFIDENCE,
         )
-        self.face_mesh = mp_face_mesh.FaceMesh(
-            max_num_faces=1,
-            refine_landmarks=config.FACEMESH_REFINE_LANDMARKS,
-            min_detection_confidence=config.FACEMESH_MIN_DETECTION_CONFIDENCE,
+        face_options = vision.FaceLandmarkerOptions(
+            base_options=mp_python.BaseOptions(model_asset_path=face_model_path),
+            running_mode=vision.RunningMode.IMAGE,
+            num_faces=1,
+            min_face_detection_confidence=config.FACEMESH_MIN_DETECTION_CONFIDENCE,
+            min_face_presence_confidence=config.FACEMESH_MIN_TRACKING_CONFIDENCE,
             min_tracking_confidence=config.FACEMESH_MIN_TRACKING_CONFIDENCE,
         )
-        self.mp_pose_module = mp_pose
-        self.mp_face_module = mp_face_mesh
-        self.mp_drawing = mp_drawing
+
+        self.pose_landmarker = vision.PoseLandmarker.create_from_options(pose_options)
+        self.face_landmarker = vision.FaceLandmarker.create_from_options(face_options)
 
         # --- calibration state ---
         self.baseline = Baseline()
@@ -160,6 +169,10 @@ class PostureFatigueTracker:
         # --- "no person" grace tracking ---
         self._last_seen_time: Optional[float] = None
 
+        # --- break timer state ---
+        self.session_start_time = time.time()
+        self.last_break_time = time.time()
+
         # start calibration automatically on construction
         self.start_calibration()
 
@@ -170,6 +183,7 @@ class PostureFatigueTracker:
         """(Re)start the calibration phase. Resets baseline + EMA state."""
         self.is_calibrating = True
         self.calibration_start_time = time.time()
+        self.last_break_time = time.time()
         self._calib_cva = []
         self._calib_shoulder_y = []
         self._calib_shoulder_tilt = []
@@ -183,10 +197,13 @@ class PostureFatigueTracker:
         self.posture_buffer.clear()
         self.fatigue_buffer.clear()
 
+    def reset_break_timer(self) -> None:
+        self.last_break_time = time.time()
+
     def close(self) -> None:
         """Release MediaPipe resources."""
-        self.pose.close()
-        self.face_mesh.close()
+        self.pose_landmarker.close()
+        self.face_landmarker.close()
 
     # ------------------------------------------------------------------
     # Main per-frame entry point
@@ -197,16 +214,26 @@ class PostureFatigueTracker:
         self._last_process_time = now
 
         h, w = frame_bgr.shape[:2]
-        # BGR -> RGB. MediaPipe requires a C-contiguous array, and a plain
-        # reversed-channel slice ([:, :, ::-1]) is a non-contiguous view,
-        # so we materialize it with ascontiguousarray.
-        rgb = np.ascontiguousarray(frame_bgr[:, :, ::-1])
-        rgb.flags.writeable = False
 
-        pose_result = self.pose.process(rgb)
-        face_result = self.face_mesh.process(rgb)
+        # --- Low light room luminance check ---
+        gray = np.mean(frame_bgr, axis=2)
+        ambient_luminance = float(np.mean(gray))
+
+        rgb = np.ascontiguousarray(frame_bgr[:, :, ::-1])
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+
+        pose_result = self.pose_landmarker.detect(mp_image)
+        face_result = self.face_landmarker.detect(mp_image)
 
         metrics = FrameMetrics(timestamp=now)
+        metrics.ambient_luminance = ambient_luminance
+        metrics.is_low_light = ambient_luminance < config.LOW_LIGHT_LUMINANCE_THRESHOLD
+
+        # 20-20-20 Break Timer calculation
+        elapsed_since_break = now - self.last_break_time
+        metrics.break_time_remaining = max(0.0, config.BREAK_REMINDER_INTERVAL_SEC - elapsed_since_break)
+        if elapsed_since_break >= config.BREAK_REMINDER_INTERVAL_SEC:
+            metrics.break_recommended = True
 
         pose_ok, pose_data = self._extract_pose(pose_result, w, h)
         face_ok, face_data = self._extract_face(face_result, w, h)
@@ -225,6 +252,11 @@ class PostureFatigueTracker:
         if face_ok:
             self._process_eyes(face_data, metrics, now, dt)
 
+            # --- Too close to screen check ---
+            if self.baseline.calibrated and self.baseline.face_diag > 1e-3 and metrics.face_diag:
+                if metrics.face_diag > (self.baseline.face_diag * config.FACE_TOO_CLOSE_RATIO):
+                    metrics.is_too_close = True
+
         if self.is_calibrating:
             self._update_calibration(metrics, now)
         else:
@@ -241,10 +273,10 @@ class PostureFatigueTracker:
     # Landmark extraction helpers
     # ------------------------------------------------------------------
     def _extract_pose(self, pose_result, w: int, h: int):
-        if not pose_result.pose_landmarks:
+        if not pose_result.pose_landmarks or len(pose_result.pose_landmarks) == 0:
             return False, None
 
-        lm = pose_result.pose_landmarks.landmark
+        lm = pose_result.pose_landmarks[0]
         needed = {
             "left_shoulder": lm[config.LEFT_SHOULDER],
             "right_shoulder": lm[config.RIGHT_SHOULDER],
@@ -253,7 +285,7 @@ class PostureFatigueTracker:
         }
 
         visible = {
-            name: (p.visibility >= config.POSE_VISIBILITY_THRESHOLD)
+            name: (getattr(p, "visibility", 1.0) >= config.POSE_VISIBILITY_THRESHOLD)
             for name, p in needed.items()
         }
 
@@ -268,14 +300,14 @@ class PostureFatigueTracker:
         return True, {
             "points_px": px,
             "visible": px_visible,
-            "raw_landmarks": pose_result.pose_landmarks,
+            "raw_landmarks": lm,
         }
 
     def _extract_face(self, face_result, w: int, h: int):
-        if not face_result.multi_face_landmarks:
+        if not face_result.face_landmarks or len(face_result.face_landmarks) == 0:
             return False, None
 
-        lm = face_result.multi_face_landmarks[0].landmark
+        lm = face_result.face_landmarks[0]
 
         try:
             right_eye_px = [(lm[i].x * w, lm[i].y * h) for i in config.RIGHT_EYE_EAR_IDX]
