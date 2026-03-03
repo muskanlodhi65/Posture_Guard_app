@@ -228,10 +228,11 @@ def main() -> int:
             ok, frame = cap.read()
             if not ok or frame is None:
                 consecutive_failures += 1
-                if consecutive_failures >= config.MAX_CONSECUTIVE_FRAME_FAILURES:
-                    print("ERROR: Too many frame failures. Exiting.")
-                    break
-                time.sleep(0.05)
+                time.sleep(0.1)
+                if consecutive_failures % 30 == 0:
+                    # Attempt cap re-initialization
+                    cap.release()
+                    cap = open_camera(config.CAMERA_INDEX) or cap
                 continue
             consecutive_failures = 0
 

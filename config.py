@@ -131,5 +131,5 @@ UI_PANEL_ALPHA = 0.55
 # =========================================================================
 # MISC / ROBUSTNESS
 # =========================================================================
-MAX_CONSECUTIVE_FRAME_FAILURES = 30
+MAX_CONSECUTIVE_FRAME_FAILURES = 120
 NO_PERSON_GRACE_SEC = 2.0
