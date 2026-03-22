@@ -24,17 +24,17 @@ RIGHT_SHOULDER = 12
 LEFT_EAR = 7
 RIGHT_EAR = 8
 
-POSE_MIN_DETECTION_CONFIDENCE = 0.6
-POSE_MIN_TRACKING_CONFIDENCE = 0.6
+POSE_MIN_DETECTION_CONFIDENCE = 0.4
+POSE_MIN_TRACKING_CONFIDENCE = 0.4
 POSE_MODEL_COMPLEXITY = 1
-POSE_VISIBILITY_THRESHOLD = 0.5
+POSE_VISIBILITY_THRESHOLD = 0.3
 
 RIGHT_EYE_EAR_IDX = [33, 160, 158, 133, 153, 144]
 LEFT_EYE_EAR_IDX = [362, 385, 387, 263, 373, 380]
 FACE_OVAL_EXTREMES_IDX = [10, 152, 234, 454]  # top, chin, left cheek, right cheek
 
-FACEMESH_MIN_DETECTION_CONFIDENCE = 0.6
-FACEMESH_MIN_TRACKING_CONFIDENCE = 0.6
+FACEMESH_MIN_DETECTION_CONFIDENCE = 0.4
+FACEMESH_MIN_TRACKING_CONFIDENCE = 0.4
 FACEMESH_REFINE_LANDMARKS = True
 
 # =========================================================================
@@ -47,15 +47,15 @@ EMA_ALPHA_EAR = 0.40       # smoothing factor for Eye Aspect Ratio
 # =========================================================================
 # SLIDING WINDOW / TEMPORAL BUFFER
 # =========================================================================
-BUFFER_WINDOW_SEC = 5.0        # sustained-posture evaluation window
+BUFFER_WINDOW_SEC = 2.5        # sustained-posture evaluation window (faster detection)
 BUFFER_MAX_SAMPLES = 300       # hard cap on samples kept in deque
-SUSTAINED_BAD_RATIO = 0.70     # fraction of samples in window that must be "bad"
+SUSTAINED_BAD_RATIO = 0.65     # fraction of samples in window that must be "bad"
 
 # =========================================================================
 # CALIBRATION
 # =========================================================================
 CALIBRATION_DURATION_SEC = 5.0   # calibration duration in seconds
-CALIBRATION_MIN_SAMPLES = 15     # minimum valid samples required
+CALIBRATION_MIN_SAMPLES = 8      # minimum valid samples required
 
 # =========================================================================
 # POSTURE / SLOUCH THRESHOLDS
@@ -93,8 +93,8 @@ HIGH_BLINK_RATE_BPM_THRESHOLD = 30
 # Available voice personalities: "scolding", "gentle", "cyberpunk"
 VOICE_PERSONALITY_MODE = "scolding"
 
-ALERT_PERSISTENCE_SEC = 4.0
-ALERT_DEBOUNCE_SEC = 15.0
+ALERT_PERSISTENCE_SEC = 1.5
+ALERT_DEBOUNCE_SEC = 8.0
 ALERT_SOUND_ENABLED = True
 ALERT_NOTIFICATION_ENABLED = True
 ALERT_BEEP_FREQUENCY_HZ = 1000

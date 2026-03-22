@@ -10,7 +10,7 @@ Controls:
     c        -> recalibrate baseline
     s        -> toggle audio voice alerts on/off
     n        -> toggle desktop notifications on/off
-    p        -> cycle voice personality (scolding -> gentle -> cyberpunk)
+    p        -> cycle voice personality (hindi_scolding -> scolding -> hindi_gentle -> gentle -> cyberpunk)
     b        -> reset 20-20-20 break timer
 """
 
@@ -30,7 +30,7 @@ except ImportError:
 
 import config
 from alerts import AlertDispatcher
-from server import start_server_thread, update_telemetry
+from server import start_server_thread, update_telemetry, register_dispatcher
 from tracker import FrameMetrics, PostureFatigueTracker
 
 
@@ -56,28 +56,8 @@ def put_text(frame: np.ndarray, text: str, org, scale: float, color, thickness: 
 
 
 def draw_skeleton_overlay(frame: np.ndarray, metrics: FrameMetrics) -> None:
-    if metrics.pose_landmarks_px:
-        pts = metrics.pose_landmarks_px
-        color = config.COLOR_BAD if metrics.is_slouching else config.COLOR_GOOD
-
-        def draw_point(name, radius=5):
-            if name in pts:
-                p = (int(pts[name][0]), int(pts[name][1]))
-                cv2.circle(frame, p, radius, color, -1, lineType=cv2.LINE_AA)
-            return pts.get(name)
-
-        ls = draw_point("left_shoulder")
-        rs = draw_point("right_shoulder")
-        le = draw_point("left_ear")
-        re = draw_point("right_ear")
-
-        def draw_line(p1, p2):
-            if p1 is not None and p2 is not None:
-                cv2.line(frame, (int(p1[0]), int(p1[1])), (int(p2[0]), int(p2[1])), color, 2, cv2.LINE_AA)
-
-        draw_line(ls, rs)
-        draw_line(ls, le)
-        draw_line(rs, re)
+    """Clean camera feed - skeleton overlay disabled."""
+    pass
 
 
 def draw_calibration_ui(frame: np.ndarray, metrics: FrameMetrics) -> None:
@@ -171,6 +151,18 @@ def draw_warning_banner(frame: np.ndarray, text: str) -> None:
 # =========================================================================
 
 def open_camera(index: int) -> Optional[cv2.VideoCapture]:
+    import sys
+    # Try DirectShow first on Windows for reliable low-latency access
+    if sys.platform.startswith("win"):
+        cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
+        if cap.isOpened():
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.FRAME_WIDTH)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
+            cap.set(cv2.CAP_PROP_FPS, config.TARGET_FPS)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # minimize frame buffer lag
+            print(f"Camera {index} opened via DirectShow backend.")
+            return cap
+
     cap = cv2.VideoCapture(index)
     if not cap.isOpened():
         cap.release()
@@ -182,6 +174,7 @@ def open_camera(index: int) -> Optional[cv2.VideoCapture]:
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.FRAME_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
     cap.set(cv2.CAP_PROP_FPS, config.TARGET_FPS)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     return cap
 
 
@@ -208,9 +201,10 @@ def main() -> int:
         cap.release()
         return 1
 
-    personalities = ["scolding", "gentle", "cyberpunk"]
+    personalities = ["hindi_scolding", "scolding", "hindi_gentle", "gentle", "cyberpunk"]
     personality_idx = 0
     dispatcher = AlertDispatcher(personality=personalities[personality_idx])
+    register_dispatcher(dispatcher)   # link dispatcher to web API
     sound_on = config.ALERT_SOUND_ENABLED
     notif_on = config.ALERT_NOTIFICATION_ENABLED
 
@@ -265,7 +259,7 @@ def main() -> int:
             if metrics.warning:
                 draw_warning_banner(frame, metrics.warning)
 
-            # Evaluated Alerts
+            # Evaluated Alerts — each type fires its own specific voice message
             if not metrics.is_calibrating:
                 dispatcher.evaluate(
                     key="slouch",
@@ -286,12 +280,14 @@ def main() -> int:
                     is_active=metrics.is_too_close,
                     title="PostureGuard: Too close to screen",
                     message="Move back from the monitor to protect your eyes.",
+                    voice_prompt=dispatcher.get_prompt_text("too_close")
                 )
                 dispatcher.evaluate(
                     key="low_light",
                     is_active=metrics.is_low_light,
                     title="PostureGuard: Low ambient light",
                     message="Room illumination is low. Turn on more lights.",
+                    voice_prompt=dispatcher.get_prompt_text("low_light")
                 )
                 if metrics.break_recommended:
                     dispatcher.trigger_break_alert()

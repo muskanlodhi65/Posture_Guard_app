@@ -241,6 +241,13 @@ class PostureFatigueTracker:
         metrics.landmarks_found = pose_ok
         metrics.face_found = face_ok
 
+        # Debug: print detection status every ~3 seconds (90 frames at 30fps)
+        if not hasattr(self, '_debug_frame_count'):
+            self._debug_frame_count = 0
+        self._debug_frame_count += 1
+        if self._debug_frame_count % 90 == 0:
+            print(f"[DEBUG] Pose detected: {pose_ok} | Face detected: {face_ok} | Light: {round(ambient_luminance, 1)}")
+
         if not pose_ok and not face_ok:
             self._handle_no_person(now, metrics)
             return metrics

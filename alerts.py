@@ -1,9 +1,9 @@
 """
 alerts.py
 ---------
-Non-blocking, debounced alert dispatcher with multiple Voice Personalities
-("scolding", "gentle", "cyberpunk") for posture, fatigue, screen proximity,
-low-light room conditions, and 20-20-20 break reminders.
+Non-blocking, INSTANT alert dispatcher with bilingual Voice Personalities.
+Uses Windows SAPI (win32com) for zero-delay speech on Windows.
+Falls back to pyttsx3 if win32com is unavailable.
 """
 
 from __future__ import annotations
@@ -15,12 +15,26 @@ from typing import Dict, Optional
 
 import config
 
+# ---- Windows SAPI (instant, non-blocking) ----
+_SAPI_AVAILABLE = False
+_sapi_speaker = None
 try:
-    import pyttsx3
-    _PYTTSX3_AVAILABLE = True
+    import win32com.client
+    _sapi_speaker = win32com.client.Dispatch("SAPI.SpVoice")
+    _sapi_speaker.Rate = 0   # normal speed
+    _sapi_speaker.Volume = 100
+    _SAPI_AVAILABLE = True
 except Exception:
-    pyttsx3 = None
-    _PYTTSX3_AVAILABLE = False
+    pass
+
+# ---- pyttsx3 fallback ----
+_PYTTSX3_AVAILABLE = False
+if not _SAPI_AVAILABLE:
+    try:
+        import pyttsx3
+        _PYTTSX3_AVAILABLE = True
+    except Exception:
+        pyttsx3 = None
 
 try:
     from plyer import notification as _plyer_notification
@@ -37,30 +51,48 @@ except Exception:
     _WINSOUND_AVAILABLE = False
 
 
-# Personality message templates
+# =========================================================================
+# PERSONALITY MESSAGE TEMPLATES (Hindi + English)
+# =========================================================================
 PERSONALITY_PROMPTS = {
+    "hindi_scolding": {
+        "slouch": "Arey! Seedhe baitho abhi! Jhuk kar mat baitho bilkul!",
+        "fatigue": "Arey! Aankhein faad ke dekh rahe ho! Abhi break lo!",
+        "too_close": "Arey! Screen se peeche hato! Aankhein kharaab ho jaayengi!",
+        "low_light": "Yaar! Kamre mein light on karo! Itne andheron mein kaam mat karo!",
+        "break": "Bees minute ho gaye! Abhi 20 second ke liye door dekho aur gardan ghoomao!",
+    },
     "scolding": {
-        "slouch": "Hey! Stop slouching right now! Sit up straight!",
-        "fatigue": "Hey! Look at your eyes! Wake up and take a break!",
-        "too_close": "Hey! Step back! You are way too close to the screen!",
-        "low_light": "Hey! Turn on the lights! Your room is too dark for your eyes!",
-        "break": "Time's up! Look away 20 feet for 20 seconds and stretch your neck!",
+        "slouch": "Hey! Stop slouching right now! Sit up straight immediately!",
+        "fatigue": "Hey! Your eyes are strained! Take a break right now!",
+        "too_close": "Hey! Move back from the screen! You are way too close!",
+        "low_light": "Hey! Turn on the lights! Your room is dangerously dark!",
+        "break": "20 minutes up! Look away 20 feet for 20 seconds now!",
+    },
+    "hindi_gentle": {
+        "slouch": "Please apni peeth seedhi karein aur shoulders relax karein.",
+        "fatigue": "Aapki aankhein thak gayi hain. Thoda aaram le lijiye.",
+        "too_close": "Aankhon ki sehat ke liye screen se thoda peeche hakar baithein.",
+        "low_light": "Kamre mein roshni kam hai. Thodi light jala lijiye please.",
+        "break": "Aankhon ko aaram dene ka waqt aa gaya hai. 20 second ke liye door dekhein.",
     },
     "gentle": {
-        "slouch": "Gentle reminder to straighten your back and relax your shoulders.",
-        "fatigue": "Your eyes seem tired. Take a deep breath and close your eyes for a moment.",
-        "too_close": "Please sit back comfortably to protect your eyesight.",
-        "low_light": "The room seems dim. Consider turning on a warm light.",
-        "break": "It's time for a 20-second break! Look out the window and stretch gently.",
+        "slouch": "A gentle reminder to sit up straight and relax your shoulders.",
+        "fatigue": "Your eyes look tired. Please close them for a moment.",
+        "too_close": "Please move back a little to protect your eyesight.",
+        "low_light": "The room seems a little dark. Consider switching on a light.",
+        "break": "Time for your 20-second eye break! Look at something far away.",
     },
     "cyberpunk": {
-        "slouch": "Warning: Postural alignment degraded. Re-aligning spine protocol.",
-        "fatigue": "Warning: Ocular scan indicates visual fatigue. System break recommended.",
-        "too_close": "Proximity limit breached! Recalibrating distance to monitor.",
-        "low_light": "Ambient light low. Ocular strain risk elevated.",
-        "break": "20-20-20 protocol activated. Initiate 20-second optical reset.",
+        "slouch": "Warning: Spinal alignment failure detected. Correct posture immediately.",
+        "fatigue": "Ocular fatigue alert: Visual system overloaded. Initiating rest protocol.",
+        "too_close": "Proximity breach! Screen distance critical. Recalibrate position.",
+        "low_light": "Low ambient light detected. Ocular damage risk elevated.",
+        "break": "20-20-20 protocol activated. Optical reset required. Look away now.",
     }
 }
+
+VALID_PERSONALITIES = list(PERSONALITY_PROMPTS.keys())
 
 
 class AlertDispatcher:
@@ -70,7 +102,7 @@ class AlertDispatcher:
         debounce_sec: float = config.ALERT_DEBOUNCE_SEC,
         sound_enabled: bool = config.ALERT_SOUND_ENABLED,
         notifications_enabled: bool = config.ALERT_NOTIFICATION_ENABLED,
-        personality: str = config.VOICE_PERSONALITY_MODE,
+        personality: str = "hindi_scolding",
     ) -> None:
         self.persistence_sec = persistence_sec
         self.debounce_sec = debounce_sec
@@ -83,16 +115,17 @@ class AlertDispatcher:
         self._lock = threading.Lock()
         self._speech_lock = threading.Lock()
 
+        print(f"[PostureGuard] Voice engine: {'Windows SAPI (instant)' if _SAPI_AVAILABLE else 'pyttsx3 (fallback)'}")
+        print(f"[PostureGuard] Active personality: {personality}")
+
     def set_personality(self, personality: str) -> None:
         if personality in PERSONALITY_PROMPTS:
             self.personality = personality
+            print(f"[PostureGuard] Voice personality changed to: {personality}")
 
     def get_prompt_text(self, key: str, detail_reason: str = "") -> str:
-        base_dict = PERSONALITY_PROMPTS.get(self.personality, PERSONALITY_PROMPTS["scolding"])
-        base = base_dict.get(key, "")
-        if detail_reason:
-            return f"{base} {detail_reason}"
-        return base
+        base_dict = PERSONALITY_PROMPTS.get(self.personality, PERSONALITY_PROMPTS["hindi_scolding"])
+        return base_dict.get(key, "")
 
     def evaluate(
         self,
@@ -131,11 +164,7 @@ class AlertDispatcher:
 
     def trigger_break_alert(self) -> None:
         text = self.get_prompt_text("break")
-        self._dispatch_async(
-            "PostureGuard: 20-20-20 Break Time",
-            "Take 20 seconds to look 20 feet away and stretch!",
-            text
-        )
+        self._dispatch_async("PostureGuard: Break Time!", "Take a 20-second eye break now!", text)
 
     # ------------------------------------------------------------------
     def _dispatch_async(self, title: str, message: str, voice_prompt: str) -> None:
@@ -148,40 +177,53 @@ class AlertDispatcher:
         if self.notifications_enabled:
             self._send_notification(title, message)
         if self.sound_enabled:
-            spoken = self._speak_warning(voice_prompt)
-            if not spoken:
-                self._play_beep()
+            self._speak_warning(voice_prompt)
 
     # ------------------------------------------------------------------
     def _speak_warning(self, text: str) -> bool:
-        if not _PYTTSX3_AVAILABLE:
+        if not text:
             return False
 
-        if not self._speech_lock.acquire(blocking=False):
-            return True
+        # Windows SAPI — instant, non-blocking with SVSFlagsAsync
+        if _SAPI_AVAILABLE and _sapi_speaker is not None:
+            if not self._speech_lock.acquire(blocking=False):
+                return True
+            try:
+                SVSFlagsAsync = 1  # speak asynchronously — no blocking
+                _sapi_speaker.Speak(text, SVSFlagsAsync)
+                return True
+            except Exception as e:
+                print(f"[PostureGuard SAPI Error]: {e}")
+                return False
+            finally:
+                self._speech_lock.release()
 
-        try:
-            engine = pyttsx3.init()
-            rate = 175 if self.personality == "scolding" else (140 if self.personality == "gentle" else 160)
-            engine.setProperty("rate", rate)
-            engine.setProperty("volume", 1.0)
-            engine.say(text)
-            engine.runAndWait()
-            return True
-        except Exception as e:
-            print(f"[PostureGuard Voice Warning Error]: {e}")
-            return False
-        finally:
-            self._speech_lock.release()
+        # pyttsx3 fallback
+        if _PYTTSX3_AVAILABLE:
+            if not self._speech_lock.acquire(blocking=False):
+                return True
+            try:
+                engine = pyttsx3.init()
+                engine.setProperty("rate", 175)
+                engine.setProperty("volume", 1.0)
+                engine.say(text)
+                engine.runAndWait()
+                return True
+            except Exception as e:
+                print(f"[PostureGuard Voice Error]: {e}")
+                return False
+            finally:
+                self._speech_lock.release()
+
+        # Beep fallback
+        self._play_beep()
+        return False
 
     def _send_notification(self, title: str, message: str) -> None:
         if _PLYER_AVAILABLE:
             try:
                 _plyer_notification.notify(
-                    title=title,
-                    message=message,
-                    app_name="PostureGuard",
-                    timeout=5,
+                    title=title, message=message, app_name="PostureGuard", timeout=4,
                 )
                 return
             except Exception:

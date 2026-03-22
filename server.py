@@ -1,9 +1,8 @@
 """
 server.py
 ---------
-Flask Web Server providing real-time telemetry API and an interactive, premium
-analytics web dashboard for PostureGuard Pro with rich animations, interactive cards,
-live metric filtering, break trigger actions, and dark glassmorphic styling.
+Flask Web Server providing real-time telemetry API, voice personality switcher API,
+and an interactive bilingual analytics dashboard for PostureGuard Pro.
 """
 
 from __future__ import annotations
@@ -42,6 +41,13 @@ latest_telemetry = {
 telemetry_history = []
 MAX_HISTORY = 600  # 10 minutes history at 1s intervals
 
+# Voice dispatcher reference (set by main.py on init)
+_dispatcher_ref = None
+
+def register_dispatcher(dispatcher):
+    global _dispatcher_ref
+    _dispatcher_ref = dispatcher
+
 def update_telemetry(metrics, voice_personality: str):
     global latest_telemetry, telemetry_history
     now = time.time()
@@ -56,6 +62,7 @@ def update_telemetry(metrics, voice_personality: str):
         "fatigue": metrics.ocular_fatigue,
         "too_close": metrics.is_too_close,
         "low_light": metrics.is_low_light,
+        "blinks": metrics.blink_count_total,
     }
 
     latest_telemetry.update({
@@ -88,6 +95,21 @@ def get_telemetry():
     res["history"] = telemetry_history[-60:]  # Last 60 seconds
     return jsonify(res)
 
+VALID_PERSONALITIES = ["hindi_scolding", "scolding", "hindi_gentle", "gentle", "cyberpunk"]
+
+@app.route("/api/set_voice", methods=["POST"])
+def set_voice():
+    """Endpoint to change voice personality from the web dashboard."""
+    data = request.get_json(force=True)
+    personality = data.get("personality", "")
+    if personality not in VALID_PERSONALITIES:
+        return jsonify({"error": "Invalid personality"}), 400
+    if _dispatcher_ref is not None:
+        _dispatcher_ref.set_personality(personality)
+        latest_telemetry["voice_personality"] = personality
+        return jsonify({"success": True, "personality": personality})
+    return jsonify({"error": "Dispatcher not ready"}), 503
+
 @app.route("/")
 def index():
     return render_template_string(HTML_DASHBOARD)
@@ -98,7 +120,7 @@ HTML_DASHBOARD = """
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PostureGuard Pro — Interactive Ergonomic Dashboard</title>
+  <title>PostureGuard Pro — Live Ergonomic Dashboard</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
@@ -113,53 +135,60 @@ HTML_DASHBOARD = """
       --text: #f8fafc;
       --subtext: #94a3b8;
     }
-    
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Outfit', sans-serif; }
-    body { background: var(--bg); color: var(--text); padding: 28px; min-height: 100vh; }
-    
-    /* Header styling */
-    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 28px; background: rgba(15, 23, 42, 0.6); padding: 20px 24px; border-radius: 16px; border: 1px solid rgba(255, 255, 255, 0.08); backdrop-filter: blur(12px); }
+    body { background: var(--bg); color: var(--text); padding: 24px; min-height: 100vh; }
+
+    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; background: rgba(15, 23, 42, 0.7); padding: 18px 22px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.07); backdrop-filter: blur(12px); flex-wrap: wrap; gap: 12px; }
     .brand { display: flex; align-items: center; gap: 12px; }
-    .logo-dot { width: 14px; height: 14px; background: var(--accent-blue); border-radius: 50%; box-shadow: 0 0 16px var(--accent-blue); }
-    .header h1 { font-size: 24px; font-weight: 700; background: linear-gradient(135deg, #38bdf8, #a855f7); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-    
-    .status-badge { padding: 8px 18px; border-radius: 30px; font-size: 14px; font-weight: 600; transition: all 0.3s ease; display: inline-flex; align-items: center; gap: 8px; }
-    .badge-good { background: rgba(34, 197, 94, 0.15); color: var(--good); border: 1px solid rgba(34, 197, 94, 0.3); }
-    .badge-bad { background: rgba(239, 68, 68, 0.15); color: var(--bad); border: 1px solid rgba(239, 68, 68, 0.3); animation: pulse 1.5s infinite; }
+    .logo-dot { width: 13px; height: 13px; background: var(--accent-blue); border-radius: 50%; box-shadow: 0 0 14px var(--accent-blue); animation: glowPulse 2s infinite; }
+    @keyframes glowPulse { 0%,100%{box-shadow:0 0 8px var(--accent-blue);} 50%{box-shadow:0 0 22px var(--accent-blue);} }
+    .header h1 { font-size: 22px; font-weight: 700; background: linear-gradient(135deg, #38bdf8, #a855f7); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .status-badge { padding: 8px 16px; border-radius: 30px; font-size: 13px; font-weight: 600; transition: all 0.3s; display: inline-flex; align-items: center; gap: 7px; }
+    .badge-good { background: rgba(34,197,94,0.14); color: var(--good); border: 1px solid rgba(34,197,94,0.3); }
+    .badge-bad  { background: rgba(239,68,68,0.14); color: var(--bad); border: 1px solid rgba(239,68,68,0.3); animation: alertPulse 1.4s infinite; }
+    @keyframes alertPulse { 0%,100%{transform:scale(1);} 50%{transform:scale(1.04);} }
 
-    @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.03); } }
+    /* Metric Cards */
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 22px; }
+    .card { background: var(--card-bg); padding: 20px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.05); backdrop-filter: blur(10px); transition: all 0.22s ease; position: relative; overflow: hidden; }
+    .card:hover { transform: translateY(-3px); border-color: rgba(56,189,248,0.35); box-shadow: 0 10px 22px -8px rgba(0,0,0,0.5); }
+    .card::before { content:''; position:absolute; top:0; left:0; width:4px; height:100%; background:var(--accent-blue); border-radius:2px; }
+    .card.card-warn::before { background:var(--warn); }
+    .card.card-bad::before { background:var(--bad); }
+    .card-title { font-size: 12px; color: var(--subtext); text-transform: uppercase; letter-spacing: 0.8px; font-weight: 500; margin-bottom: 8px; }
+    .card-value { font-size: 30px; font-weight: 700; }
+    .card-subtext { font-size: 11px; color: var(--subtext); margin-top: 5px; }
 
-    /* Interactive Metric Cards Grid */
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 18px; margin-bottom: 28px; }
-    .card { background: var(--card-bg); padding: 22px; border-radius: 16px; border: 1px solid rgba(255, 255, 255, 0.06); backdrop-filter: blur(10px); transition: all 0.25s ease; cursor: pointer; position: relative; overflow: hidden; }
-    .card:hover { transform: translateY(-4px); border-color: rgba(56, 189, 248, 0.4); box-shadow: 0 12px 24px -10px rgba(0, 0, 0, 0.5); }
-    .card::before { content: ''; position: absolute; top: 0; left: 0; width: 4px; height: 100%; background: var(--accent-blue); border-radius: 4px; }
-    .card.card-warn::before { background: var(--warn); }
-    .card.card-bad::before { background: var(--bad); }
+    /* Voice Selector Panel */
+    .voice-panel { background: var(--card-bg); border: 1px solid rgba(255,255,255,0.07); border-radius: 16px; padding: 20px 22px; margin-bottom: 22px; backdrop-filter: blur(10px); }
+    .voice-panel h3 { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+    .voice-btns { display: flex; flex-wrap: wrap; gap: 10px; }
+    .voice-btn { padding: 9px 18px; border-radius: 10px; border: 1.5px solid rgba(168,85,247,0.3); background: rgba(168,85,247,0.08); color: #c084fc; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.18s; }
+    .voice-btn:hover { background: rgba(168,85,247,0.22); border-color: #a855f7; }
+    .voice-btn.active { background: #a855f7; color: #fff; border-color: #a855f7; box-shadow: 0 0 14px rgba(168,85,247,0.45); }
+    .voice-label { display: flex; flex-direction: column; line-height: 1.3; }
+    .voice-label .lang-tag { font-size: 10px; opacity: 0.7; font-weight: 400; text-transform: uppercase; letter-spacing: 0.5px; }
 
-    .card-title { font-size: 13px; color: var(--subtext); text-transform: uppercase; letter-spacing: 0.8px; font-weight: 500; margin-bottom: 10px; }
-    .card-value { font-size: 32px; font-weight: 700; color: var(--text); }
-    .card-subtext { font-size: 12px; color: var(--subtext); margin-top: 6px; }
+    /* Charts Grid */
+    .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+    .chart-box { background: var(--card-bg); padding: 22px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.05); backdrop-filter: blur(10px); }
+    .chart-box h3 { font-size: 15px; font-weight: 600; margin-bottom: 16px; color: var(--text); }
 
-    /* Interactive Control Bar */
-    .controls-bar { display: flex; gap: 16px; margin-bottom: 28px; flex-wrap: wrap; }
-    .btn { background: rgba(56, 189, 248, 0.12); color: var(--accent-blue); border: 1px solid rgba(56, 189, 248, 0.3); padding: 10px 20px; border-radius: 12px; font-weight: 600; cursor: pointer; transition: all 0.2s ease; display: inline-flex; align-items: center; gap: 8px; }
-    .btn:hover { background: var(--accent-blue); color: #000; box-shadow: 0 0 16px rgba(56, 189, 248, 0.4); }
+    .info-row { display: flex; gap: 16px; margin-bottom: 22px; flex-wrap: wrap; }
+    .info-chip { background: rgba(30,41,59,0.6); border: 1px solid rgba(255,255,255,0.07); border-radius: 10px; padding: 8px 16px; font-size: 13px; display: flex; align-items: center; gap: 8px; }
+    .info-chip .label { color: var(--subtext); }
+    .info-chip .val { font-weight: 600; color: var(--text); }
 
-    /* Interactive Charts Grid */
-    .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
-    .chart-box { background: var(--card-bg); padding: 24px; border-radius: 18px; border: 1px solid rgba(255, 255, 255, 0.06); backdrop-filter: blur(10px); }
-    .chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
-    .chart-header h3 { font-size: 17px; font-weight: 600; color: var(--text); }
-
-    @media (max-width: 900px) { .charts-grid { grid-template-columns: 1fr; } }
+    @media(max-width:860px) { .charts-grid { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
+
+  <!-- Header -->
   <div class="header">
     <div class="brand">
       <div class="logo-dot"></div>
-      <h1>PostureGuard Pro Live Interactive Telemetry</h1>
+      <h1>PostureGuard Pro — Live Dashboard</h1>
     </div>
     <div id="statusBadge" class="status-badge badge-good">● Ergonomics Optimal</div>
   </div>
@@ -173,13 +202,13 @@ HTML_DASHBOARD = """
     </div>
     <div class="card" id="cvaCard">
       <div class="card-title">CVA Angle</div>
-      <div class="card-value" id="cvaVal">55.0°</div>
+      <div class="card-value" id="cvaVal">--°</div>
       <div class="card-subtext">Craniovertebral Tilt</div>
     </div>
     <div class="card" id="blinkCard">
       <div class="card-title">Blink Rate</div>
-      <div class="card-value" id="bpmVal">16 bpm</div>
-      <div class="card-subtext" id="blinkSub">Total: 0 blinks</div>
+      <div class="card-value" id="bpmVal">-- bpm</div>
+      <div class="card-subtext" id="blinkSub">Total Blinks: 0</div>
     </div>
     <div class="card" id="breakCard">
       <div class="card-title">20-20-20 Break</div>
@@ -188,28 +217,43 @@ HTML_DASHBOARD = """
     </div>
   </div>
 
-  <!-- Interactive Controls Bar -->
-  <div class="controls-bar">
-    <button class="btn" onclick="filterChart('cva')">📈 Toggle CVA Focus</button>
-    <button class="btn" onclick="filterChart('score')">📊 Toggle Score Focus</button>
-    <div style="margin-left: auto; display: flex; align-items: center; gap: 12px; font-size: 14px; color: var(--subtext);">
-      <span>Voice Mode: <strong id="voiceModeVal" style="color: var(--accent-purple);">SCOLDING</strong></span>
-      <span>Lighting: <strong id="lightVal" style="color: var(--good);">GOOD</strong></span>
+  <!-- Info Row -->
+  <div class="info-row">
+    <div class="info-chip"><span class="label">💡 Room Light:</span><span class="val" id="lightVal">Good</span></div>
+    <div class="info-chip"><span class="label">📏 Distance:</span><span class="val" id="distVal">Normal</span></div>
+    <div class="info-chip"><span class="label">🎙️ Active Mode:</span><span class="val" id="activeModeChip" style="color:#c084fc">Hindi Scolding</span></div>
+  </div>
+
+  <!-- Voice / Language Selector -->
+  <div class="voice-panel">
+    <h3>🎙️ Alert Voice Language &amp; Mode Selector</h3>
+    <div class="voice-btns">
+      <button class="voice-btn active" id="btn-hindi_scolding" onclick="setVoice('hindi_scolding')">
+        <div class="voice-label"><span>🔊 कड़क हिंदी</span><span class="lang-tag">Hindi · Scolding</span></div>
+      </button>
+      <button class="voice-btn" id="btn-scolding" onclick="setVoice('scolding')">
+        <div class="voice-label"><span>🔊 Strict English</span><span class="lang-tag">English · Scolding</span></div>
+      </button>
+      <button class="voice-btn" id="btn-hindi_gentle" onclick="setVoice('hindi_gentle')">
+        <div class="voice-label"><span>🌸 सौम्य हिंदी</span><span class="lang-tag">Hindi · Gentle</span></div>
+      </button>
+      <button class="voice-btn" id="btn-gentle" onclick="setVoice('gentle')">
+        <div class="voice-label"><span>🌸 Soft English</span><span class="lang-tag">English · Gentle</span></div>
+      </button>
+      <button class="voice-btn" id="btn-cyberpunk" onclick="setVoice('cyberpunk')">
+        <div class="voice-label"><span>🤖 Cyberpunk AI</span><span class="lang-tag">English · Robotic</span></div>
+      </button>
     </div>
   </div>
 
-  <!-- Realtime Interactive Charts -->
+  <!-- Charts -->
   <div class="charts-grid">
     <div class="chart-box">
-      <div class="chart-header">
-        <h3>CVA Posture Angle Trend (°)</h3>
-      </div>
+      <h3>📐 CVA Posture Angle Trend (°)</h3>
       <canvas id="cvaChart"></canvas>
     </div>
     <div class="chart-box">
-      <div class="chart-header">
-        <h3>Session Score Trend (0-100)</h3>
-      </div>
+      <h3>📊 Session Score + Blink Count</h3>
       <canvas id="scoreChart"></canvas>
     </div>
   </div>
@@ -220,91 +264,123 @@ HTML_DASHBOARD = """
 
     const cvaChart = new Chart(cvaCtx, {
       type: 'line',
-      data: {
-        labels: [],
-        datasets: [{
-          label: 'CVA Angle (°)',
-          data: [],
-          borderColor: '#38bdf8',
-          backgroundColor: 'rgba(56, 189, 248, 0.1)',
-          fill: true,
-          tension: 0.4,
-          pointRadius: 3
-        }]
-      },
+      data: { labels: [], datasets: [{
+        label: 'CVA Angle (°)', data: [],
+        borderColor: '#38bdf8', backgroundColor: 'rgba(56,189,248,0.08)',
+        fill: true, tension: 0.4, pointRadius: 2
+      }]},
       options: {
         responsive: true,
-        plugins: { legend: { display: true, labels: { color: '#94a3b8' } } },
+        plugins: { legend: { labels: { color: '#94a3b8' }}},
         scales: {
-          x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } },
-          y: { min: 30, max: 75, grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } }
+          x: { grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { color: '#64748b', maxTicksLimit: 8 }},
+          y: { min: 30, max: 75, grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { color: '#94a3b8' }}
         }
       }
     });
 
     const scoreChart = new Chart(scoreCtx, {
       type: 'line',
-      data: {
-        labels: [],
-        datasets: [{
-          label: 'Session Score',
-          data: [],
-          borderColor: '#4ade80',
-          backgroundColor: 'rgba(74, 222, 128, 0.1)',
-          fill: true,
-          tension: 0.4,
-          pointRadius: 3
-        }]
-      },
+      data: { labels: [], datasets: [
+        { label: 'Session Score', data: [], borderColor: '#4ade80', backgroundColor: 'rgba(74,222,128,0.08)', fill: true, tension: 0.4, pointRadius: 2, yAxisID: 'y' },
+        { label: 'Blinks', data: [], borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,0.08)', fill: false, tension: 0.4, pointRadius: 2, yAxisID: 'y1' }
+      ]},
       options: {
         responsive: true,
-        plugins: { legend: { display: true, labels: { color: '#94a3b8' } } },
+        plugins: { legend: { labels: { color: '#94a3b8' }}},
         scales: {
-          x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } },
-          y: { min: 0, max: 100, grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } }
+          x: { grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { color: '#64748b', maxTicksLimit: 8 }},
+          y: { min: 0, max: 100, grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { color: '#94a3b8' }, position: 'left' },
+          y1: { min: 0, grid: { drawOnChartArea: false }, ticks: { color: '#f59e0b' }, position: 'right' }
         }
       }
     });
+
+    const VOICE_LABELS = {
+      'hindi_scolding': '🔊 कड़क हिंदी (Hindi Scolding)',
+      'scolding': '🔊 Strict English',
+      'hindi_gentle': '🌸 सौम्य हिंदी (Hindi Gentle)',
+      'gentle': '🌸 Soft English',
+      'cyberpunk': '🤖 Cyberpunk AI'
+    };
+
+    let currentPersonality = 'hindi_scolding';
+
+    async function setVoice(p) {
+      try {
+        const res = await fetch('/api/set_voice', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ personality: p })
+        });
+        const d = await res.json();
+        if (d.success) {
+          currentPersonality = p;
+          document.querySelectorAll('.voice-btn').forEach(b => b.classList.remove('active'));
+          document.getElementById('btn-' + p).classList.add('active');
+          document.getElementById('activeModeChip').innerText = VOICE_LABELS[p] || p;
+        }
+      } catch(e) { console.error(e); }
+    }
 
     async function pollTelemetry() {
       try {
         const res = await fetch('/api/telemetry');
         const data = await res.json();
 
-        // Update card values
-        document.getElementById('scoreVal').innerText = Math.round(data.session_score) + '/100';
-        document.getElementById('cvaVal').innerText = (data.cva_smoothed || '--') + '°';
-        document.getElementById('bpmVal').innerText = (data.blink_rate_bpm || 0) + ' bpm';
-        document.getElementById('blinkSub').innerText = `Total: ${data.blink_count_total || 0} blinks`;
-        document.getElementById('voiceModeVal').innerText = (data.voice_personality || 'SCOLDING').toUpperCase();
+        // Score card
+        const score = Math.round(data.session_score);
+        document.getElementById('scoreVal').innerText = score + '/100';
+        document.getElementById('scoreSub').innerText = score >= 80 ? '✅ Optimal' : score >= 50 ? '⚠️ Fair' : '❌ Poor';
 
-        const lightVal = document.getElementById('lightVal');
-        if (data.is_low_light) {
-          lightVal.innerText = 'DIM ROOM';
-          lightVal.style.color = 'var(--warn)';
-        } else {
-          lightVal.innerText = 'GOOD';
-          lightVal.style.color = 'var(--good)';
-        }
+        // CVA card
+        document.getElementById('cvaVal').innerText = (data.cva_smoothed != null ? data.cva_smoothed : '--') + '°';
 
+        // Blink card — real-time count
+        const bpm = data.blink_rate_bpm != null ? data.blink_rate_bpm.toFixed(1) : '--';
+        document.getElementById('bpmVal').innerText = bpm + ' bpm';
+        document.getElementById('blinkSub').innerText = 'Total Blinks: ' + (data.blink_count_total || 0);
+
+        // Break timer
         const rem = data.break_time_remaining || 0;
         const mins = Math.floor(rem / 60);
         const secs = Math.floor(rem % 60);
         document.getElementById('breakVal').innerText = `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+        const breakCard = document.getElementById('breakCard');
+        breakCard.className = rem < 60 ? 'card card-bad' : rem < 300 ? 'card card-warn' : 'card';
 
-        // Status badge logic
+        // Lighting
+        const lightEl = document.getElementById('lightVal');
+        lightEl.innerText = data.is_low_light ? '⚠️ Dim Room' : '✅ Good';
+        lightEl.style.color = data.is_low_light ? 'var(--warn)' : 'var(--good)';
+
+        // Screen distance
+        const distEl = document.getElementById('distVal');
+        distEl.innerText = data.is_too_close ? '⚠️ Too Close!' : '✅ Normal';
+        distEl.style.color = data.is_too_close ? 'var(--bad)' : 'var(--good)';
+
+        // Sync active voice button with tracker if changed via keyboard
+        if (data.voice_personality && data.voice_personality !== currentPersonality) {
+          currentPersonality = data.voice_personality;
+          document.querySelectorAll('.voice-btn').forEach(b => b.classList.remove('active'));
+          const btn = document.getElementById('btn-' + currentPersonality);
+          if (btn) btn.classList.add('active');
+          document.getElementById('activeModeChip').innerText = VOICE_LABELS[currentPersonality] || currentPersonality;
+        }
+
+        // Status badge
         const badge = document.getElementById('statusBadge');
         if (data.is_slouching || data.ocular_fatigue || data.is_too_close) {
           badge.className = 'status-badge badge-bad';
-          let msg = data.slouch_reason || data.fatigue_reason || (data.is_too_close ? 'Too Close to Screen' : 'Bad Posture');
-          badge.innerText = '⚠️ Alert: ' + msg;
+          const msg = data.slouch_reason || data.fatigue_reason || (data.is_too_close ? 'Too Close to Screen' : 'Bad Posture');
+          badge.innerText = '⚠️ ' + msg;
         } else {
           badge.className = 'status-badge badge-good';
           badge.innerText = '● Ergonomics Optimal';
         }
 
-        // Live chart updates
-        if (data.history) {
+        // Charts update
+        if (data.history && data.history.length) {
           const labels = data.history.map(h => h.time);
           cvaChart.data.labels = labels;
           cvaChart.data.datasets[0].data = data.history.map(h => h.cva);
@@ -312,22 +388,14 @@ HTML_DASHBOARD = """
 
           scoreChart.data.labels = labels;
           scoreChart.data.datasets[0].data = data.history.map(h => h.score);
+          scoreChart.data.datasets[1].data = data.history.map(h => h.blinks || 0);
           scoreChart.update('none');
         }
-      } catch (e) {}
-    }
-
-    function filterChart(type) {
-      if (type === 'cva') {
-        cvaChart.data.datasets[0].borderWidth = 3;
-        cvaChart.update();
-      } else {
-        scoreChart.data.datasets[0].borderWidth = 3;
-        scoreChart.update();
-      }
+      } catch(e) {}
     }
 
     setInterval(pollTelemetry, 1000);
+    pollTelemetry();
   </script>
 </body>
 </html>
