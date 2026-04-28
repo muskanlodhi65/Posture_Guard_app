@@ -187,7 +187,7 @@ def main() -> int:
 
     # Start Flask Analytics Web Server
     start_server_thread()
-    print("Live Web Dashboard running at http://localhost:5000")
+    print("Live Web Dashboard running at http://127.0.0.1:5000")
 
     cap = open_camera(config.CAMERA_INDEX)
     if cap is None:
@@ -201,9 +201,9 @@ def main() -> int:
         cap.release()
         return 1
 
-    personalities = ["hindi_scolding", "scolding", "hindi_gentle", "gentle", "cyberpunk"]
+    personalities = ["angry_hindi", "angry_english", "hindi_scolding", "scolding", "hindi_gentle", "gentle", "cyberpunk"]
     personality_idx = 0
-    dispatcher = AlertDispatcher(personality=personalities[personality_idx])
+    dispatcher = AlertDispatcher(personality=personalities[personality_idx], user_name=config.USER_NAME)
     register_dispatcher(dispatcher)   # link dispatcher to web API
     sound_on = config.ALERT_SOUND_ENABLED
     notif_on = config.ALERT_NOTIFICATION_ENABLED
@@ -315,10 +315,10 @@ def main() -> int:
                 print("20-20-20 Break Timer Reset.")
 
             try:
-                if cv2.getWindowProperty(config.WINDOW_NAME, cv2.WND_PROP_VISIBLE) < 1:
-                    break
+                # Keep window alive smoothly without force exiting on focus change
+                pass
             except cv2.error:
-                break
+                pass
 
     except KeyboardInterrupt:
         print("Interrupted by user.")

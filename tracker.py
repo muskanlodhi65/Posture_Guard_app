@@ -474,9 +474,9 @@ class PostureFatigueTracker:
         fatigue_reasons = []
         if prolonged:
             fatigue_reasons.append("Prolonged eye closure")
-        if elapsed_for_rate >= config.BLINK_RATE_WINDOW_SEC and bpm < config.LOW_BLINK_RATE_BPM_THRESHOLD:
+        if elapsed_for_rate >= 5.0 and bpm < config.LOW_BLINK_RATE_BPM_THRESHOLD:
             fatigue_reasons.append("Low blink rate")
-        if elapsed_for_rate >= config.BLINK_RATE_WINDOW_SEC and bpm > config.HIGH_BLINK_RATE_BPM_THRESHOLD:
+        if elapsed_for_rate >= 5.0 and bpm > config.HIGH_BLINK_RATE_BPM_THRESHOLD:
             fatigue_reasons.append("Excessive blinking")
 
         metrics.ocular_fatigue = len(fatigue_reasons) > 0

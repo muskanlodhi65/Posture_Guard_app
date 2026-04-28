@@ -78,20 +78,21 @@ BREAK_STRETCH_DURATION_SEC = 20.0      # 20 seconds stretch break
 # =========================================================================
 # EYE ASPECT RATIO (EAR) / BLINK / FATIGUE THRESHOLDS
 # =========================================================================
-EAR_DEFAULT_THRESHOLD = 0.21
-EAR_DYNAMIC_THRESHOLD_RATIO = 0.78
-EAR_CONSEC_FRAMES_FOR_BLINK = 2
-EAR_PROLONGED_CLOSED_SEC = 2.0
+EAR_DEFAULT_THRESHOLD = 0.25
+EAR_DYNAMIC_THRESHOLD_RATIO = 0.85
+EAR_CONSEC_FRAMES_FOR_BLINK = 1
+EAR_PROLONGED_CLOSED_SEC = 5.0
 
-BLINK_RATE_WINDOW_SEC = 60.0
-LOW_BLINK_RATE_BPM_THRESHOLD = 10
-HIGH_BLINK_RATE_BPM_THRESHOLD = 30
+BLINK_RATE_WINDOW_SEC = 15.0
+LOW_BLINK_RATE_BPM_THRESHOLD = 14
+HIGH_BLINK_RATE_BPM_THRESHOLD = 28
 
 # =========================================================================
 # ALERT / VOICE PERSONALITY MODES
 # =========================================================================
 # Available voice personalities: "scolding", "gentle", "cyberpunk"
-VOICE_PERSONALITY_MODE = "scolding"
+VOICE_PERSONALITY_MODE = "hindi_scolding"
+USER_NAME = "Muskan"             # Personalized User Name for voice alerts
 
 ALERT_PERSISTENCE_SEC = 1.5
 ALERT_DEBOUNCE_SEC = 8.0
