@@ -12,9 +12,9 @@
 
 ## 📸 Live Web Analytics Dashboard Preview
 
-![PostureGuard Pro Dashboard Preview](docs/dashboard_preview.webp)
+![PostureGuard Pro Dashboard Preview](docs/dashboard_preview.png)
 
-> *Figure 1: Live Glassmorphic Web Analytics Dashboard (`http://127.0.0.1:5000`) featuring real-time CVA posture angles, blink rates, 20-20-20 break timer, dynamic name personalization, and 7 interactive voice modes including **Gussa Mode**.*
+> *Figure 1: Exact PostureGuard Pro Live Glassmorphic Analytics Dashboard (`http://127.0.0.1:5000`) featuring real-time CVA posture angles, blink rates, 20-20-20 break timer, personalized user name input (Muskan), and 7 interactive voice modes including **😡 🔥 Gussa Hindi Mode** and **Angry English Mode**.*
 
 ---
 
@@ -74,7 +74,7 @@ $$y_t = \alpha \cdot x_t + (1 - \alpha) \cdot y_{t-1}$$
 ```text
 PostureGuard/
 ├── docs/
-│   └── dashboard_preview.webp # High-resolution Dashboard UI screenshot
+│   └── dashboard_preview.png  # High-resolution PostureGuard Pro Dashboard UI screenshot
 ├── config.py                  # Centralized configuration, thresholds, indices & buffer windows
 ├── geometry.py                # NumPy Euclidean math, CVA, EAR, bounding box & EMA math
 ├── tracker.py                 # MediaPipe Pose & FaceMesh inference, calibration & state machine
