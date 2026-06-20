@@ -78,8 +78,9 @@ BREAK_STRETCH_DURATION_SEC = 20.0      # 20 seconds stretch break
 # =========================================================================
 # EYE ASPECT RATIO (EAR) / BLINK / FATIGUE THRESHOLDS
 # =========================================================================
-EAR_DEFAULT_THRESHOLD = 0.25
-EAR_DYNAMIC_THRESHOLD_RATIO = 0.85
+# Eye Aspect Ratio (EAR) Landmarks & Adaptive Calibration
+EAR_DEFAULT_THRESHOLD = 0.23
+EAR_DYNAMIC_THRESHOLD_RATIO = 0.75  # 75% of calibrated open eye EAR = closed/blink
 EAR_CONSEC_FRAMES_FOR_BLINK = 1
 EAR_PROLONGED_CLOSED_SEC = 5.0
 

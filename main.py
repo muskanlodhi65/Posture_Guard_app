@@ -1,102 +1,84 @@
 """
 main.py
 -------
-PostureGuard Pro entry point: runs webcam capture, evaluates posture & eye fatigue,
-monitors ambient lighting, screen distance proximity, 20-20-20 break timer,
-serves Flask Live Web Dashboard, and plays personality voice alerts.
-
-Controls:
-    q / ESC  -> quit
-    c        -> recalibrate baseline
-    s        -> toggle audio voice alerts on/off
-    n        -> toggle desktop notifications on/off
-    p        -> cycle voice personality (hindi_scolding -> scolding -> hindi_gentle -> gentle -> cyberpunk)
-    b        -> reset 20-20-20 break timer
+Main execution pipeline for PostureGuard.
+Integrates MediaPipe tracking, Flask live analytics web server,
+thread-safe Indian accent voice dispatcher, and OpenCV camera overlay UI with OPEN DASHBOARD button.
 """
 
 from __future__ import annotations
 
 import sys
 import time
-from typing import Optional
-
+import webbrowser
+import cv2
 import numpy as np
 
-try:
-    import cv2
-except ImportError:
-    print("ERROR: OpenCV is required. Install it with `pip install opencv-python`.")
-    sys.exit(1)
-
-import config
 from alerts import AlertDispatcher
-from server import start_server_thread, update_telemetry, register_dispatcher
+import config
+from server import register_dispatcher, start_server_thread, update_telemetry
 from tracker import FrameMetrics, PostureFatigueTracker
 
-
 # =========================================================================
-# UI HELPERS
+# UI DRAWING HELPERS
 # =========================================================================
 
-def draw_translucent_panel(frame: np.ndarray, x: int, y: int, w: int, h: int,
-                            color=config.COLOR_PANEL_BG, alpha: float = config.UI_PANEL_ALPHA) -> None:
-    x2, y2 = x + w, y + h
-    x2 = min(x2, frame.shape[1])
-    y2 = min(y2, frame.shape[0])
-    if x2 <= x or y2 <= y:
-        return
-    overlay = frame.copy()
-    cv2.rectangle(overlay, (x, y), (x2, y2), color, thickness=-1)
-    cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, dst=frame)
+def draw_translucent_panel(
+    frame: np.ndarray, x: int, y: int, w: int, h: int,
+    color: tuple = (20, 20, 20), alpha: float = 0.55
+) -> None:
+    sub = frame[y:y+h, x:x+w]
+    rect = np.full_like(sub, color, dtype=np.uint8)
+    frame[y:y+h, x:x+w] = cv2.addWeighted(sub, 1 - alpha, rect, alpha, 0)
 
 
-def put_text(frame: np.ndarray, text: str, org, scale: float, color, thickness: int = config.FONT_THICKNESS,
-             font=cv2.FONT_HERSHEY_SIMPLEX) -> None:
-    cv2.putText(frame, text, org, font, scale, color, thickness, lineType=cv2.LINE_AA)
+def put_text(
+    frame: np.ndarray, text: str, pos: tuple,
+    scale: float = 0.6, color: tuple = (255, 255, 255), thickness: int = 1
+) -> None:
+    cv2.putText(frame, text, pos, config.FONT_FAMILY, scale, (0, 0, 0), thickness + 2, cv2.LINE_AA)
+    cv2.putText(frame, text, pos, config.FONT_FAMILY, scale, color, thickness, cv2.LINE_AA)
 
 
 def draw_skeleton_overlay(frame: np.ndarray, metrics: FrameMetrics) -> None:
-    """Clean camera feed - skeleton overlay disabled."""
-    pass
+    if metrics.eye_landmarks_px:
+        for eye_key in ("left_eye", "right_eye"):
+            pts = metrics.eye_landmarks_px.get(eye_key, [])
+            if len(pts) >= 6:
+                pts_int = np.array(pts, dtype=np.int32)
+                cv2.polylines(frame, [pts_int], True, (255, 255, 0), 1, cv2.LINE_AA)
 
 
 def draw_calibration_ui(frame: np.ndarray, metrics: FrameMetrics) -> None:
     h, w = frame.shape[:2]
-    draw_translucent_panel(frame, 0, 0, w, h, color=(20, 20, 20), alpha=0.35)
-
-    msg = "CALIBRATING - Sit upright, face the camera naturally"
-    (tw, th), _ = cv2.getTextSize(msg, cv2.FONT_HERSHEY_SIMPLEX, config.FONT_SCALE_TITLE, 2)
-    put_text(frame, msg, ((w - tw) // 2, h // 2 - 40), config.FONT_SCALE_TITLE, config.COLOR_TEXT, 2)
-
-    bar_w, bar_h = int(w * 0.5), 24
-    bar_x, bar_y = (w - bar_w) // 2, h // 2
-    cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_w, bar_y + bar_h), config.COLOR_TEXT, 2)
-    fill_w = int(bar_w * metrics.calibration_progress)
-    cv2.rectangle(frame, (bar_x, bar_y), (bar_x + fill_w, bar_y + bar_h), config.COLOR_ACCENT, -1)
-
-    pct_msg = f"{int(metrics.calibration_progress * 100)}%"
-    put_text(frame, pct_msg, (bar_x + bar_w + 15, bar_y + bar_h - 5), config.FONT_SCALE_VALUE, config.COLOR_TEXT, 1)
+    draw_translucent_panel(frame, 0, 0, w, h, color=(10, 10, 30), alpha=0.6)
+    pct = int(metrics.calibration_progress * 100)
+    bar_w = int((w - 200) * metrics.calibration_progress)
+    cv2.rectangle(frame, (100, h // 2), (w - 100, h // 2 + 30), (50, 50, 50), -1)
+    cv2.rectangle(frame, (100, h // 2), (100 + bar_w, h // 2 + 30), (0, 255, 255), -1)
+    put_text(frame, "CALIBRATING ERGONOMIC BASELINE...", (100, h // 2 - 20), 0.8, (0, 255, 255), 2)
+    put_text(frame, f"Sit up straight and look at the screen ({pct}%)", (100, h // 2 + 60), 0.6, (255, 255, 255))
 
 
-def draw_dashboard(frame: np.ndarray, metrics: FrameMetrics, fps: float,
-                    sound_on: bool, notif_on: bool, personality: str) -> None:
+def draw_dashboard(
+    frame: np.ndarray,
+    metrics: FrameMetrics,
+    fps: float,
+    sound_on: bool,
+    notif_on: bool,
+    personality: str,
+) -> None:
     h, w = frame.shape[:2]
-    panel_w = 340
-    panel_h = 310
-    margin = 12
-    draw_translucent_panel(frame, margin, margin, panel_w, panel_h)
 
-    x = margin + 14
-    y = margin + 26
-    line_gap = 24
+    # --- Left HUD Panel ---
+    panel_w, panel_h = 420, 235
+    draw_translucent_panel(frame, 10, 10, panel_w, panel_h, color=(20, 20, 20), alpha=0.65)
 
-    put_text(frame, "PostureGuard Pro Telemetry", (x, y), config.FONT_SCALE_TITLE, config.COLOR_ACCENT, 2)
-    y += line_gap + 2
+    x, y = 20, 32
+    line_gap = 25
 
-    posture_color = config.COLOR_BAD if metrics.sustained_slouch else (
-        config.COLOR_WARN if metrics.is_slouching else config.COLOR_GOOD
-    )
-    posture_label = "SLOUCHING" if metrics.sustained_slouch else ("Adjusting..." if metrics.is_slouching else "GOOD")
+    posture_color = config.COLOR_BAD if metrics.sustained_slouch else config.COLOR_GOOD
+    posture_label = "SLOUCHING" if metrics.sustained_slouch else ("Bad" if metrics.is_slouching else "Good")
     cva_text = f"{metrics.cva_smoothed:.1f} deg" if metrics.cva_smoothed is not None else "N/A"
     put_text(frame, f"CVA: {cva_text} | Posture: {posture_label}", (x, y), config.FONT_SCALE_VALUE, posture_color); y += line_gap
 
@@ -128,14 +110,21 @@ def draw_dashboard(frame: np.ndarray, metrics: FrameMetrics, fps: float,
     )
     put_text(frame, f"Session Score: {metrics.session_score:.0f}/100 | Mode: {personality.upper()}", (x, y), config.FONT_SCALE_VALUE, score_color); y += line_gap
 
-    put_text(frame, f"FPS: {fps:.1f} | Web Dashboard: http://localhost:5000", (x, y), config.FONT_SCALE_LABEL, config.COLOR_TEXT)
+    put_text(frame, f"FPS: {fps:.1f} | Web: http://127.0.0.1:5000", (x, y), config.FONT_SCALE_LABEL, config.COLOR_TEXT)
 
-    # --- status dot, top-right ---
+    # --- Top-Right GLOWING "OPEN DASHBOARD" BUTTON ---
+    btn_w, btn_h = 240, 42
+    btn_x, btn_y = w - btn_w - 20, 15
+    draw_translucent_panel(frame, btn_x, btn_y, btn_w, btn_h, color=(168, 85, 247), alpha=0.85)
+    cv2.rectangle(frame, (btn_x, btn_y), (btn_x + btn_w, btn_y + btn_h), (56, 189, 248), 2, cv2.LINE_AA)
+    put_text(frame, "OPEN DASHBOARD [D]", (btn_x + 16, btn_y + 27), 0.65, (255, 255, 255), 2)
+
+    # --- Status dot ---
     dot_color = config.COLOR_BAD if (metrics.sustained_slouch or metrics.ocular_fatigue or metrics.is_too_close) else config.COLOR_GOOD
-    cv2.circle(frame, (w - 30, 30), 12, dot_color, -1, lineType=cv2.LINE_AA)
+    cv2.circle(frame, (w - 285, 35), 10, dot_color, -1, lineType=cv2.LINE_AA)
 
-    # --- footer hint bar ---
-    hint = f"[c]calib [p]mode:{personality[:6]} [s]voice:{'ON' if sound_on else 'OFF'} [b]reset-break [q]quit"
+    # --- Footer hint bar ---
+    hint = f"[d]OPEN DASHBOARD [c]calib [p]mode:{personality[:6]} [s]voice:{'ON' if sound_on else 'OFF'} [b]reset-break [q]quit"
     draw_translucent_panel(frame, 0, h - 30, w, 30, color=(15, 15, 15), alpha=0.6)
     put_text(frame, hint, (10, h - 10), config.FONT_SCALE_LABEL, config.COLOR_TEXT)
 
@@ -151,15 +140,13 @@ def draw_warning_banner(frame: np.ndarray, text: str) -> None:
 # =========================================================================
 
 def open_camera(index: int) -> Optional[cv2.VideoCapture]:
-    import sys
-    # Try DirectShow first on Windows for reliable low-latency access
     if sys.platform.startswith("win"):
         cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
         if cap.isOpened():
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.FRAME_WIDTH)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
             cap.set(cv2.CAP_PROP_FPS, config.TARGET_FPS)
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # minimize frame buffer lag
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             print(f"Camera {index} opened via DirectShow backend.")
             return cap
 
@@ -204,7 +191,7 @@ def main() -> int:
     personalities = ["angry_hindi", "angry_english", "hindi_scolding", "scolding", "hindi_gentle", "gentle", "cyberpunk"]
     personality_idx = 0
     dispatcher = AlertDispatcher(personality=personalities[personality_idx], user_name=config.USER_NAME)
-    register_dispatcher(dispatcher)   # link dispatcher to web API
+    register_dispatcher(dispatcher)
     sound_on = config.ALERT_SOUND_ENABLED
     notif_on = config.ALERT_NOTIFICATION_ENABLED
 
@@ -224,7 +211,6 @@ def main() -> int:
                 consecutive_failures += 1
                 time.sleep(0.1)
                 if consecutive_failures % 30 == 0:
-                    # Attempt cap re-initialization
                     cap.release()
                     cap = open_camera(config.CAMERA_INDEX) or cap
                 continue
@@ -234,11 +220,8 @@ def main() -> int:
                 frame = cv2.flip(frame, 1)
 
             metrics = tracker.process(frame)
-
-            # Update telemetry for Web Server
             update_telemetry(metrics, dispatcher.personality)
 
-            # FPS Calculation
             now_tick = time.time()
             instant_dt = now_tick - prev_tick
             prev_tick = now_tick
@@ -248,7 +231,6 @@ def main() -> int:
                     fps_smoother_alpha * instant_fps + (1 - fps_smoother_alpha) * fps
                 )
 
-            # Drawing
             draw_skeleton_overlay(frame, metrics)
 
             if metrics.is_calibrating:
@@ -259,7 +241,6 @@ def main() -> int:
             if metrics.warning:
                 draw_warning_banner(frame, metrics.warning)
 
-            # Evaluated Alerts — each type fires its own specific voice message
             if not metrics.is_calibrating:
                 dispatcher.evaluate(
                     key="slouch",
@@ -298,6 +279,9 @@ def main() -> int:
             key = cv2.waitKey(1) & 0xFF
             if key in (ord("q"), 27):
                 break
+            elif key == ord("d"):
+                print("Opening Live Dashboard in Browser...")
+                webbrowser.open("http://127.0.0.1:5000")
             elif key == ord("c"):
                 tracker.start_calibration()
             elif key == ord("s"):
@@ -315,7 +299,6 @@ def main() -> int:
                 print("20-20-20 Break Timer Reset.")
 
             try:
-                # Keep window alive smoothly without force exiting on focus change
                 pass
             except cv2.error:
                 pass
@@ -327,8 +310,6 @@ def main() -> int:
         cv2.destroyAllWindows()
         tracker.close()
         print("PostureGuard shut down cleanly.")
-
-    return 0
 
 
 if __name__ == "__main__":

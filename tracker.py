@@ -435,7 +435,12 @@ class PostureFatigueTracker:
             "left_eye": face_data["left_eye_px"],
         }
 
-        threshold = self.baseline.ear_blink_threshold
+        # Dynamic personal EAR threshold based on user's calibrated baseline
+        if self.baseline.calibrated and self.baseline.ear_blink_threshold > 0:
+            threshold = self.baseline.ear_blink_threshold
+        else:
+            threshold = config.EAR_DEFAULT_THRESHOLD
+
         eyes_closed = self._ema_ear is not None and self._ema_ear < threshold
         metrics.is_eyes_closed = eyes_closed
 
