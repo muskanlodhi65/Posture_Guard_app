@@ -124,6 +124,8 @@ COLOR_WARN = (0, 200, 255)        # BGR amber
 COLOR_TEXT = (245, 245, 245)      # near-white
 COLOR_PANEL_BG = (30, 30, 30)     # dark panel background
 COLOR_ACCENT = (255, 180, 40)     # BGR light blue-ish accent
+import cv2
+FONT_FAMILY = cv2.FONT_HERSHEY_SIMPLEX
 FONT_SCALE_LABEL = 0.55
 FONT_SCALE_VALUE = 0.65
 FONT_SCALE_TITLE = 0.8
