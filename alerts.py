@@ -150,12 +150,13 @@ class AlertDispatcher:
 
         self._violation_start_time: Dict[str, Optional[float]] = {}
         self._last_fired: Dict[str, float] = {}
+        self._alert_history: Dict[str, list] = {}  # Track alert timestamps for 30s window
         self._lock = threading.Lock()
         self._speech_lock = threading.Lock()
         self._audio_cache: Dict[str, str] = {}
 
         print(f"[PostureGuard] Personalized Voice Engine Active for: '{user_name}'")
-        print(f"[PostureGuard] Primary Voice Engine: {'gTTS (Studio Quality HD 44.1kHz)' if _GTTS_AVAILABLE else 'Windows SAPI'}")
+        print(f"[PostureGuard] Rate Limiter Enabled: Max 3 alerts per 30 seconds.")
 
     def set_user_name(self, name: str) -> None:
         name_clean = name.strip()
@@ -187,6 +188,7 @@ class AlertDispatcher:
         with self._lock:
             if not is_active:
                 self._violation_start_time[key] = None
+                self._alert_history[key] = []  # Reset alert history on posture fix
                 return False
 
             start = self._violation_start_time.get(key)
@@ -198,11 +200,22 @@ class AlertDispatcher:
             if persisted_for < self.persistence_sec:
                 return False
 
+            # Rate Limiter: Max 3 alerts per 30-second window
+            history = self._alert_history.get(key, [])
+            # Keep only timestamps within last 30 seconds
+            history = [t for t in history if (now - t) <= 30.0]
+            self._alert_history[key] = history
+
+            if len(history) >= 3:
+                # Reached max 3 alerts for this 30-second window, suppress further voice alerts
+                return False
+
             last_fired = self._last_fired.get(key, 0.0)
             if (now - last_fired) < self.debounce_sec:
                 return False
 
             self._last_fired[key] = now
+            self._alert_history[key].append(now)
 
         final_voice_text = voice_prompt or self.get_prompt_text(key)
         self._dispatch_async(title, message, final_voice_text)
